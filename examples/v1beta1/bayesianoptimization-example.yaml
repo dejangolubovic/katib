@@ -1,67 +1,91 @@
-apiVersion: "kubeflow.org/v1beta1"
+apiVersion: "kubeflow.org/v1alpha3"
 kind: Experiment
 metadata:
-  namespace: kubeflow
-  name: bayesianoptimization-example
+  namespace: dejan-golubovic
+  name: gan3d-v2-args-one-file
 spec:
+  parallelTrialCount: 1
+  maxTrialCount: 1
+  maxFailedTrialCount: 1
   objective:
-    type: maximize
-    goal: 0.99
-    objectiveMetricName: Validation-accuracy
+    type: minimize
+    goal: 0
+    objectiveMetricName: discriminator-train-binary-loss
     additionalMetricNames:
-      - Train-accuracy
+        - generator-train-binary-loss
+        - discriminator-train-loss
+        - generator-train-loss
+        - discriminator-test-loss
+        - generator-test-loss
+        - train-epoch-time
+        - test-epoch-time
   algorithm:
-    algorithmName: bayesianoptimization
-    algorithmSettings:
-      - name: "random_state"
-        value: "10"
-  parallelTrialCount: 3
-  maxTrialCount: 12
-  maxFailedTrialCount: 3
+    algorithmName: random
+  metricsCollectorSpec:
+    source:
+      filter:
+        metricsFormat:
+        - ([\w|-]+)\s*=\s*((-?\d+)(\.\d+)?)
+      fileSystemPath:
+        path: "/model_outputs/metrics_custom.txt"
+        kind: File
+    collector:
+        kind: File
   parameters:
-    - name: lr
+    - name: --learning_rate
       parameterType: double
       feasibleSpace:
         min: "0.01"
-        max: "0.03"
-    - name: num-layers
+        max: "0.01"
+    - name: --nb_epochs
       parameterType: int
       feasibleSpace:
-        min: "2"
-        max: "5"
-    - name: optimizer
-      parameterType: categorical
+        min: 1
+        max: 1
+    - name: --is_full_training
+      parameterType: int
       feasibleSpace:
-        list:
-          - sgd
-          - adam
-          - ftrl
+        min: 0
+        max: 0
   trialTemplate:
-    primaryContainerName: training-container
-    trialParameters:
-      - name: learningRate
-        description: Learning rate for the training model
-        reference: lr
-      - name: numberLayers
-        description: Number of training model layers
-        reference: num-layers
-      - name: optimizer
-        description: Training model optimizer (sdg, adam or ftrl)
-        reference: optimizer
-    trialSpec:
-      apiVersion: batch/v1
-      kind: Job
-      spec:
-        template:
-          spec:
-            containers:
-              - name: training-container
-                image: docker.io/kubeflowkatib/mxnet-mnist:v1beta1-e294a90
-                command:
-                  - "python3"
-                  - "/opt/mxnet-mnist/mnist.py"
-                  - "--batch-size=64"
-                  - "--lr=${trialParameters.learningRate}"
-                  - "--num-layers=${trialParameters.numberLayers}"
-                  - "--optimizer=${trialParameters.optimizer}"
-            restartPolicy: Never
+    goTemplate:
+      rawTemplate: |-
+        apiVersion: "kubeflow.org/v1"
+        kind: TFJob
+        metadata:
+          name: {{.Trial}}
+          namespace: {{.NameSpace}}
+        spec:
+         tfReplicaSpecs:
+          Worker:
+            replicas: 2
+            restartPolicy: OnFailure
+            template:
+              spec:
+                volumes:
+                  - hostPath:
+                      path: /var/eos
+                      type: ""
+                    name: eos
+                containers:
+                  - name: tensorflow
+                    ports:
+                    - containerPort: 2222
+                      name: tfjob-port
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+                    image: registry.hub.docker.com/dejangolubovic/gan3d:batch
+                    imagePullPolicy: Always
+                    volumeMounts:
+                      - mountPath: /eos
+                        mountPropagation: HostToContainer
+                        name: eos
+                    command:
+                      - "python3"
+                      - "/opt/ganV2.py"
+                      {{- with .HyperParameters}}
+                      {{- range .}}
+                      - "{{.Name}}={{.Value}}"
+                      {{- end}}
+                      {{- end}}
